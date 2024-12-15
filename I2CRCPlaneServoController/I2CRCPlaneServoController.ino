@@ -21,6 +21,12 @@ int right_aileron_servo_pin = 6;
 int right_elevator_servo_pin = 11;
 int drivetrain_servo_pin = 3;
 
+// Used to receive commands from other arduino
+volatile char rcv_char;
+volatile int angle;
+volatile bool new_command_available = false;
+String command = "";
+
 Servo left_aileron_servo;
 Servo left_elevator_servo;
 Servo right_aileron_servo;
@@ -37,7 +43,7 @@ void setup() {
   //armDrivetrain(drivetrain_max, drivetrain_min); // Has a critical section. Drivetrain is now run from other Arduino
   Serial.begin(9600);
   Wire.begin(4);
-  Wire.onReceive(executeCommand);
+  Wire.onReceive(readCommand);
   left_aileron_servo.attach(left_aileron_servo_pin);
   left_elevator_servo.attach(left_elevator_servo_pin);
   right_aileron_servo.attach(right_aileron_servo_pin);
@@ -105,6 +111,12 @@ void armDrivetrain(int max, int min)
  
 void loop() {
   delay(10);
+  noInterrupts();
+  if(new_command_available)
+  {
+    executeCommand();
+  }
+  interrupts();
   //testServos();
 }
 
@@ -117,19 +129,27 @@ void testServos() {
   }
 }
 
-void executeCommand(int howMany) {
-  Serial.println("received on the i2c bus");
-  char rcv_char;
-  int angle;
-  String command = "";
+void readCommand(int howMany)
+{
+  Serial.print("Received on the i2c bus, ");
+  command = "";
   while (1 < Wire.available()) {
+    //Serial.println("flag1");
     rcv_char = Wire.read();
     command.concat(rcv_char);
   }
   // recieve byte as an integer
   angle = Wire.read();
   // left aileron servo
-  
+  new_command_available = true;
+}
+
+void executeCommand()
+{
+  // Critical section
+  new_command_available = false;
+  Serial.print("executing command: ");
+  Serial.println(command);
   if (command == "la") {
     Serial.print("la command: ");
     Serial.println(angle);
@@ -137,8 +157,6 @@ void executeCommand(int howMany) {
     moveServoToAngle(100-angle, left_aileron_servo);
     moveServoToAngle(100-angle, right_aileron_servo);
   }
-
-
   // left elevator servo
   if (command == "le") {
     Serial.print("le command: ");
@@ -146,8 +164,7 @@ void executeCommand(int howMany) {
     moveServoToAngle(100 - angle, left_elevator_servo);
     moveServoToAngle(angle, right_elevator_servo);
   }
-
-  // drivetrain (not used here at the moment, signal output sent to servo from other arduino)
+  // drivetrain (not used here at the moment, signal output already sent to servo from other arduino)
   if (command == "en") {
     Serial.print("en command");
     Serial.print(angle);
@@ -161,10 +178,11 @@ void executeCommand(int howMany) {
       drivetrain_servo.writeMicroseconds(drivetrain_min);
     }
   }
-
   // regualtor (this function crashes the whole system)
-  if (/*command == "re"*/false)
+  if (command == "re" && false)
   {
+    delay(500);
+    Serial.println("re command");
     // Read magnetometer
     sensors_event_t event;
     mag.getEvent(&event);
@@ -203,7 +221,6 @@ void executeCommand(int howMany) {
     Serial.print(" Z: "); Serial.print(z);
     Serial.print(" Elevator: "); Serial.print(elevatorOutput);
     Serial.print(" Aileron: "); Serial.println(aileronOutput);
-
   }
 }
 
