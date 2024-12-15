@@ -1,47 +1,24 @@
 #include <Splash.h>
-
-/* Starting with Arduino OLED coding
- *  for " arduino oled i2c tutorial : 0.96" 128 X 32 for beginners"
- *  subscribe for more arduino Tuorials and Projects
-https://www.youtube.com/channel/UCM6rbuieQBBLFsxszWA85AQ?sub_confirmation=1
- */
-
-
 #include <SPI.h>
 #include <Wire.h>
 #include <Servo.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_HMC5883_U.h>
 #include <nRF24L01.h>
 #include <RF24.h>
 #include<printf.h>
 
 #define len(arr) sizeof (arr)/sizeof (arr[0])
-
 #define OLED_RESET 4
+// Constants for servo range
+#define SERVO_MIN 0
+#define SERVO_MAX 100
   
 Adafruit_SSD1306 display(OLED_RESET);
 
-uint8_t right_joystick_vrx_percent = 50;
-uint8_t right_joystick_vry_percent = 50;
-uint8_t left_joystick_vrx_percent = 50;
-uint8_t placeholder_value = 0;
-uint8_t right_aileron_servo_pin = 5;
-uint8_t right_elevator_servo_pin = 6;
-uint8_t right_joystick_analog_pin_vrx = A2; // elevators or aileron
-uint8_t right_joystick_analog_pin_vry = A3; // elevators or aileron
-uint8_t left_joystick_analog_pin_vrx = A0; // drivetrain
-uint8_t test_limits_servo_pin = 3;
-
-uint8_t drivetrain_pin = 5;
-uint8_t drivetrain_max = 2000;
-uint8_t drivetrain_min = 1000;
-
-bool isSender = false;
-bool isReciever = false;
-bool connection_link_ok = false;
-
-unsigned long last_time = 0;
+Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
 
 Servo right_aileron_servo;
 Servo right_elevator_servo;
@@ -53,6 +30,26 @@ RF24 radio(10, 9, 4000000);
 const byte address[6] = "00001";
 bool radioNumber = 1; // 0 uses address[0] to transmit, 1 uses address[1] to transmit
 bool role = false; // true = TX role, false = RX role
+
+uint8_t right_joystick_vrx_percent = 50;
+uint8_t right_joystick_vry_percent = 50;
+uint8_t left_joystick_vrx_percent = 50;
+uint8_t placeholder_value = 0;
+uint8_t right_aileron_servo_pin = 5;
+uint8_t right_elevator_servo_pin = 6;
+uint8_t right_joystick_analog_pin_vrx = A2; // elevators or aileron
+uint8_t right_joystick_analog_pin_vry = A3; // elevators or aileron
+uint8_t left_joystick_analog_pin_vrx = A0; // drivetrain
+uint8_t test_limits_servo_pin = 3;
+uint8_t drivetrain_pin = 5;
+uint8_t drivetrain_max = 2000;
+uint8_t drivetrain_min = 1000;
+
+bool isSender = false;
+bool isReciever = false;
+bool connection_link_ok = false;
+
+unsigned long last_time = 0;
 
 typedef void (*MenuFunction) ();
 
@@ -198,6 +195,10 @@ void setup()
   Wire.begin();
   Serial.begin(9600);
   while(!Serial);
+  if (!mag.begin()) {
+    Serial.println("Could not find a valid HMC5883 sensor, check wiring!");
+    //while (1);
+  }
   initializeMenuSystem();
   armTranceiver();
   i2cScanner();
@@ -340,6 +341,10 @@ void flyPlaneReciever()
         last_time = millis();
         throttleDrivetrain(&cav); // Use this arduino to control plane
       }
+      else if (strcmp(cav.command_chr_arr, re_command) == 0) // Sanity check of recieved message
+      {
+        flyByRegulator(); 
+      }
       else
       {
         sendI2CServoCommand(cav.command_chr_arr, cav.value); // Let second arduino control ailerons and elevators
@@ -348,7 +353,57 @@ void flyPlaneReciever()
   }
 }
 
+void flyByRegulator()
+{
+    Serial.println("Reading the magnetometer");
+    // Read magnetometer
+    sensors_event_t event;
+    mag.getEvent(&event);
+    float pitch = event.magnetic.x; // X-axis represents pitch
+    float roll = event.magnetic.y;  // Y-axis represents roll
+    float z = event.magnetic.z;     // Z-axis for upside-down detection
+    // Calculate course change
+    // Check if the airplane is upside down
+    bool isUpsideDown = (z > 0);
+    // Desired pitch and roll (neutral position)
+    float desiredPitch = 10.0; // Each magnetometer needs to be calibrated
+    float desiredRoll = -10.0; // TODO: Remove hardcoded values.
+    // Calculate pitch and roll errors
+    float pitchError = desiredPitch - pitch;
+    float rollError = desiredRoll - roll;
+    // Adjust control values using proportional control
+    float elevatorOutput = PITCH_GAIN * pitchError;
+    float aileronOutput = ROLL_GAIN * rollError;
+    // Clamp outputs to servo range
+    elevatorOutput = constrain(elevatorOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, as 50 represent servo in neutral position
+    aileronOutput = constrain(aileronOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, ...
+    // Invert controls if upside down
+    if (isUpsideDown)
+    {
+      elevatorOutput = SERVO_MAX - elevatorOutput;
+      aileronOutput = SERVO_MAX - aileronOutput;
+    }
+    // Adjust servos
+    command_and_value cav;
+    cav.command_chr_arr[0] = 'l';
+    cav.command_chr_arr[1] = 'a';
+    cav.command_chr_arr[2] = '\0';
+    cav.value = aileronOutput;
+    sendI2CServoCommand(cav.command_chr_arr, cav.value);
+    cav.command_chr_arr[0] = 'l';
+    cav.command_chr_arr[1] = 'e';
+    cav.command_chr_arr[2] = '\0';
+    cav.value = elevatorOutput;
+    sendI2CServoCommand(cav.command_chr_arr, cav.value);
 
+    delay(10);
+    // Debugging
+    Serial.print("Pitch: "); Serial.print(pitch);
+    Serial.print(" Roll: "); Serial.print(roll);
+    Serial.print(" Z: "); Serial.print(z);
+    Serial.print(" Elevator: "); Serial.print(elevatorOutput);
+    Serial.print(" Aileron: "); Serial.println(aileronOutput);
+}
 
 // command can be la, le, ra, and re
 void sendI2CServoCommand(char *command, byte angle)

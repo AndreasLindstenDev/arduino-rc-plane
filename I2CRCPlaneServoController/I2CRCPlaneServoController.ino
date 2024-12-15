@@ -1,12 +1,5 @@
 #include <Wire.h>
 #include <Servo.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_HMC5883_U.h>
-Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
-
-// Constants for servo range
-#define SERVO_MIN 0
-#define SERVO_MAX 100
 
 // PID gains (adjust these for better control)
 #define PITCH_GAIN 3.5
@@ -35,11 +28,6 @@ Servo drivetrain_servo;
 Servo servos[4];
 
 void setup() {
-  if (!mag.begin()) {
-    Serial.println("Could not find a valid HMC5883 sensor, check wiring!");
-    //while (1);
-  }
-
   //armDrivetrain(drivetrain_max, drivetrain_min); // Has a critical section. Drivetrain is now run from other Arduino
   Serial.begin(9600);
   Wire.begin(4);
@@ -177,50 +165,6 @@ void executeCommand()
     {
       drivetrain_servo.writeMicroseconds(drivetrain_min);
     }
-  }
-  // regualtor (this function crashes the whole system)
-  if (command == "re" && false)
-  {
-    delay(500);
-    Serial.println("re command");
-    // Read magnetometer
-    sensors_event_t event;
-    mag.getEvent(&event);
-    float pitch = event.magnetic.x; // X-axis represents pitch
-    float roll = event.magnetic.y;  // Y-axis represents roll
-    float z = event.magnetic.z;     // Z-axis for upside-down detection
-    // Calculate course change
-    // Check if the airplane is upside down
-    bool isUpsideDown = (z > 0);
-    // Desired pitch and roll (neutral position)
-    float desiredPitch = 10.0; // Each magnetometer needs to be calibrated
-    float desiredRoll = -10.0; // TODO: Remove hardcoded values.
-    // Calculate pitch and roll errors
-    float pitchError = desiredPitch - pitch;
-    float rollError = desiredRoll - roll;
-    // Adjust control values using proportional control
-    float elevatorOutput = PITCH_GAIN * pitchError;
-    float aileronOutput = ROLL_GAIN * rollError;
-    // Clamp outputs to servo range
-    elevatorOutput = constrain(elevatorOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, as 50 represent servo in neutral position
-    aileronOutput = constrain(aileronOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, ...
-    // Invert controls if upside down
-    if (isUpsideDown)
-    {
-      elevatorOutput = SERVO_MAX - elevatorOutput;
-      aileronOutput = SERVO_MAX - aileronOutput;
-    }
-    // Adjust servos
-    moveServoToAngle(100-aileronOutput, left_aileron_servo);
-    moveServoToAngle(100-aileronOutput, right_aileron_servo);
-    moveServoToAngle(100 - elevatorOutput, left_elevator_servo);
-    moveServoToAngle(elevatorOutput, right_elevator_servo);
-    // Debugging
-    Serial.print("Pitch: "); Serial.print(pitch);
-    Serial.print(" Roll: "); Serial.print(roll);
-    Serial.print(" Z: "); Serial.print(z);
-    Serial.print(" Elevator: "); Serial.print(elevatorOutput);
-    Serial.print(" Aileron: "); Serial.println(aileronOutput);
   }
 }
 
