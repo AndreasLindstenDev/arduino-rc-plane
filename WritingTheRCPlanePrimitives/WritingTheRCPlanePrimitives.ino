@@ -1,4 +1,4 @@
-#include <splash.h>
+#include <Splash.h>
 
 /* Starting with Arduino OLED coding
  *  for " arduino oled i2c tutorial : 0.96" 128 X 32 for beginners"
@@ -37,7 +37,7 @@ uint8_t drivetrain_min = 1000;
 
 bool isSender = false;
 bool isReciever = false;
-bool control_ok = false;
+bool connection_link_ok = false;
 
 unsigned long last_time = 0;
 
@@ -46,9 +46,11 @@ Servo right_elevator_servo;
 Servo drivetrain_servo;
 Servo test_limits_servo;
 
-RF24 radio(10, 9);
+RF24 radio(10, 9, 4000000);
 
 const byte address[6] = "00001";
+bool radioNumber = 1; // 0 uses address[0] to transmit, 1 uses address[1] to transmit
+bool role = false; // true = TX role, false = RX role
 
 typedef void (*MenuFunction) ();
 
@@ -214,62 +216,90 @@ void loop()
   //testI2CSendServoCommand();
 }
 
-void deadMansSwitch()
-{
-  if(control_ok)
-  {
-    unsigned long compare_val = last_time + 1000UL;
-    unsigned long current_val = millis();
-    if(compare_val < current_val)
-    {
-      control_ok = false;
-      drivetrain_servo.writeMicroseconds(1000);
-      drawMessageOnScreen("Dead mans\nswitch", 2);
-    }
-  }
-}
 
 void flyPlaneTransmitter()
 {
   drawMessageOnScreen("Sender\nmode", 2);
   while(true)
   {
+    bool right_joystick_vrx_neutral = false;
+    bool right_joystick_vry_neutral = false;
+    bool left_joystick_vrx_neutral = false;
+    // Middle position of servo is at 50 percent
     right_joystick_vrx_percent = readJoyStickPercent(right_joystick_analog_pin_vrx);
     right_joystick_vry_percent = readJoyStickPercent(right_joystick_analog_pin_vry);
     left_joystick_vrx_percent = readJoyStickPercent(left_joystick_analog_pin_vrx);
-    // Delay some time to give capacior time to recharge?
-    delay(20);
-    transmittCommandByWiFi("la", (byte)right_joystick_vry_percent);
-    delay(20);
-    transmittCommandByWiFi("le", (byte)right_joystick_vrx_percent);
-    delay(20);
-    transmittCommandByWiFi("en", (byte)left_joystick_vrx_percent);
+    if(right_joystick_vrx_percent > 35 && right_joystick_vrx_percent < 65)
+    {
+      right_joystick_vrx_neutral = true;
+    }
+    if(right_joystick_vry_percent > 35 && right_joystick_vry_percent < 65)
+    {
+      right_joystick_vry_neutral = true;
+    }
+    if(left_joystick_vrx_percent > 35 && left_joystick_vrx_percent < 65)
+    {
+      left_joystick_vrx_neutral = true;
+    }
+    if(right_joystick_vrx_neutral && right_joystick_vry_neutral && left_joystick_vrx_neutral)
+    {
+      delay(20);
+      transmittCommandByWiFi("re", (byte)0); /* Transmitt command to use onboard regulator
+      to level the plane (crude autopilot) */
+    }
+    else
+    {
+      // Delay some time to give capacior time to recharge?
+      delay(20);
+      transmittCommandByWiFi("la", (byte)right_joystick_vry_percent);
+      delay(20);
+      transmittCommandByWiFi("le", (byte)right_joystick_vrx_percent);
+      delay(20);
+      transmittCommandByWiFi("en", (byte)left_joystick_vrx_percent);
+    }
   }
 }
 
 void flyPlaneReciever()
 {
+  Serial.println("flyPlanceReciever - flag1111");
   byte old_val;
   command_and_value cav;
   char en_command[3] = "en";
+  char re_command[3] = "re";
+  drawMessageOnScreen("Plane\nmode", 2);
   while(true)
   {
-    deadMansSwitch();
+    Serial.println("flyPlanceReciever - flag1");
+    //sendI2CServoCommand(re_command, cav.value);
+    //delay(100);
+    //continue;
+    if(connection_link_ok)
+    {
+      unsigned long compare_val = last_time + 3000UL;
+      unsigned long current_val = millis();
+      if(compare_val < current_val)
+      {
+        connection_link_ok = false;
+        drivetrain_servo.writeMicroseconds(1000); // Motors off
+        drawMessageOnScreen("Lost connection\nMotor off", 1);
+      }
+    }
     if(receiveCommandByWiFi(&cav))
     {
-      if (strcmp(cav.command_chr_arr, en_command) == 0) {
-        if(control_ok == false) // Dead mans switch
+      if (strcmp(cav.command_chr_arr, en_command) == 0) { // Sanity check of recieved message
+        if(connection_link_ok == false) //Save cycles by only drawing on status change
         {
           drawMessageOnScreen("Plane\nmode", 2);
         }
-        control_ok = true; // Dead mans swich
-        last_time = millis(); // Dead mans switch
-        throttleDrivetrain(&cav);
-        Serial.println("engine command recieved");
+        connection_link_ok = true; /* As all command types are sent continuously, only
+        update upon receiving engine command to save time*/
+        last_time = millis();
+        throttleDrivetrain(&cav); // Use this arduino to control plane
       }
       else
       {
-        sendI2CServoCommand(cav.command_chr_arr, cav.value);
+        sendI2CServoCommand(cav.command_chr_arr, cav.value); // Let second arduino control ailerons and elevators
       }
     }
   }
@@ -307,15 +337,18 @@ void initializeMenuSystem()
 
 void armTranceiver()
 {
-  radio.begin();
-  radio.setPALevel(RF24_PA_MIN);
+  while(!radio.begin())
+  {
+    drawMessageOnScreen("Could not\nconnect to\nradio", 1);
+  }
+  radio.setPALevel(RF24_PA_LOW);
+  radio.printDetails();
 }
 
 
 void transmittCommandByWiFi(const char *command, const byte value)
 {
   delay(30);
-  Serial.println("Sending message");
   if(!isSender)
   {
     radio.openWritingPipe(address);
@@ -324,19 +357,23 @@ void transmittCommandByWiFi(const char *command, const byte value)
     isSender = true;
     isReciever = false;
   }
-  Serial.println("Sending soon");
+  //Serial.println("Waiting to send");
   char command_chr_arr[3];
   strncpy(command_chr_arr, command, 2);
   command_chr_arr[2] = value;
   radio.write(&command_chr_arr, 3);
+  Serial.print("Sent: " + String(command_chr_arr[0]) + String(command_chr_arr[1]) + " ");
+  Serial.println(value);
   delay(50);
 }
 
 bool receiveCommandByWiFi(command_and_value *cav)
 {
-  delay(20);
+  //Serial.println("receiveCommandByWiFi - flag 1");
+  delay(10);
   if(!isReciever)
   {
+    //Serial.println("receiveCommandByWiFi - flag 2");
     radio.openReadingPipe(0, address);
     radio.startListening();
     isSender = false;
@@ -344,19 +381,23 @@ bool receiveCommandByWiFi(command_and_value *cav)
   }
   if(!radio.available())
   {
-    cav = nullptr;
-    return false;
-    Serial.println("No data from transamitter available");
+    return false; // Signal no message was recieved
   }
   while (radio.available()) {
+    //Serial.println("receiveCommandByWiFi - flag 4");
     char rec_chr_arr[3];
     radio.read(&rec_chr_arr, 3);
     cav->command_chr_arr[0] = rec_chr_arr[0];
     cav->command_chr_arr[1] = rec_chr_arr[1];
+    //cav->command_chr_arr[0] = 'e';
+    //cav->command_chr_arr[1] = 'n';
     cav->command_chr_arr[2] = '\0';
     cav->value = rec_chr_arr[2];
+    //cav->value = 60;
     Serial.println(cav->command_chr_arr);
     Serial.println(cav->value);
+    //Serial.println("Flag1");
+    //Serial.println("receiveCommandByWiFi - flag 5");
     return true;
   }
 }
@@ -374,7 +415,7 @@ void determineServoLimits()
   while(true)
   {
     joy_stick_percent = readJoyStickPercent(right_joystick_analog_pin_vrx);
-    if(joy_stick_percent > 90)
+    if(joy_stick_percent > 80)
     {
       milliseconds += 50;
     }
@@ -391,7 +432,7 @@ void determineServoLimits()
     snprintf(&message[19], 3, "%d", joy_stick_percent);
     test_limits_servo.writeMicroseconds(milliseconds);
     drawMessageOnScreen(message, 2);
-    if(readJoyStickPercent(right_joystick_analog_pin_vry) > 90)
+    if(readJoyStickPercent(right_joystick_analog_pin_vry) > 80)
     {
       break;
     }
@@ -438,11 +479,12 @@ void runMenu(int analog_pin_vrx, int analog_pin_vry)
   int8_t * selected_item = &current_menu_page.selected_item;
   right_joystick_vrx_percent = readJoyStickPercent(analog_pin_vrx);
   right_joystick_vry_percent = readJoyStickPercent(analog_pin_vry);
+  Serial.println("vrx: " + String(right_joystick_vrx_percent) + " vry: " + String(right_joystick_vry_percent));
   if(right_joystick_vrx_percent < 10 && *selected_item < current_menu_page.num_menu_items - 1)
   {
     *selected_item += 1;
   }
-  else if(right_joystick_vry_percent > 90)
+  else if(right_joystick_vry_percent > 80)
   {
     if(current_menu_page.menu_items[*selected_item].fMenuItemAction)
     {
@@ -453,7 +495,7 @@ void runMenu(int analog_pin_vrx, int analog_pin_vry)
       current_menu_page = (*current_menu_page.menu_items[*selected_item].next_menu_page);
     }
   }
-  else if(right_joystick_vrx_percent > 90 && *selected_item > 0)
+  else if(right_joystick_vrx_percent > 80 && *selected_item > 0)
   {
     *selected_item -= 1;
   }
@@ -602,8 +644,8 @@ void armDrivetrain()
 
 void throttleDrivetrain(command_and_value *cav)
 {
-  Serial.print("en command");
-  Serial.print(cav->value);
+  //Serial.print("en command");
+  //Serial.print(cav->value);
   if(cav->value > 55)
   {
     int val = map(cav->value, 55, 100, 1000, 2000);
