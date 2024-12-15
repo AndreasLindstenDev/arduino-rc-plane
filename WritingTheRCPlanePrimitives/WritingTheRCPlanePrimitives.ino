@@ -14,6 +14,7 @@ https://www.youtube.com/channel/UCM6rbuieQBBLFsxszWA85AQ?sub_confirmation=1
 #include <Adafruit_SSD1306.h>
 #include <nRF24L01.h>
 #include <RF24.h>
+#include<printf.h>
 
 #define len(arr) sizeof (arr)/sizeof (arr[0])
 
@@ -24,6 +25,7 @@ Adafruit_SSD1306 display(OLED_RESET);
 uint8_t right_joystick_vrx_percent = 50;
 uint8_t right_joystick_vry_percent = 50;
 uint8_t left_joystick_vrx_percent = 50;
+uint8_t placeholder_value = 0;
 uint8_t right_aileron_servo_pin = 5;
 uint8_t right_elevator_servo_pin = 6;
 uint8_t right_joystick_analog_pin_vrx = A2; // elevators or aileron
@@ -198,6 +200,7 @@ void setup()
   while(!Serial);
   initializeMenuSystem();
   armTranceiver();
+  i2cScanner();
   //right_aileron_servo.attach(right_aileron_servo_pin);
   //right_elevator_servo.attach(right_elevator_servo_pin);
   //test_limits_servo.attach(test_limits_servo_pin);
@@ -216,6 +219,44 @@ void loop()
   //testI2CSendServoCommand();
 }
 
+void i2cScanner()
+{
+  Serial.println("Starting scan");
+  //while(!Serial); // Wait for serial monitor
+  Serial.println("\nI2C Scanner");
+  byte error, address;
+  int nDevices;
+  Serial.println("Scanning...");
+  nDevices = 0;
+  for(address = 1; address < 127; address++ )
+  {
+  // The i2c_scanner uses the return value of
+  // the Write.endTransmisstion to see if
+  // a device did acknowledge to the address.
+  Wire.beginTransmission(address);
+  error = Wire.endTransmission();
+  if (error == 0)
+  {
+  Serial.print("I2C device found at address 0x");
+  if (address<16)
+  Serial.print("0");
+  Serial.print(address,HEX);
+  Serial.println(" !");
+  nDevices++;
+  }
+  else if (error==4)
+  {
+  Serial.print("Unknow error at address 0x");
+  if (address<16)
+  Serial.print("0");
+  Serial.println(address,HEX);
+  }
+  }
+  if (nDevices == 0)
+  Serial.println("No I2C devices found\n");
+  else
+  Serial.println("done\n");
+}
 
 void flyPlaneTransmitter()
 {
@@ -224,7 +265,7 @@ void flyPlaneTransmitter()
   {
     bool right_joystick_vrx_neutral = false;
     bool right_joystick_vry_neutral = false;
-    bool left_joystick_vrx_neutral = false;
+    bool left_joystick_vrx_neutral = true; // Don't use this in the logic for now
     // Middle position of servo is at 50 percent
     right_joystick_vrx_percent = readJoyStickPercent(right_joystick_analog_pin_vrx);
     right_joystick_vry_percent = readJoyStickPercent(right_joystick_analog_pin_vry);
@@ -237,24 +278,27 @@ void flyPlaneTransmitter()
     {
       right_joystick_vry_neutral = true;
     }
-    if(left_joystick_vrx_percent > 35 && left_joystick_vrx_percent < 65)
-    {
-      left_joystick_vrx_neutral = true;
-    }
+    //if(left_joystick_vrx_percent > 35 && left_joystick_vrx_percent < 65)
+    //{
+    //  left_joystick_vrx_neutral = true;
+    //}
     if(right_joystick_vrx_neutral && right_joystick_vry_neutral && left_joystick_vrx_neutral)
     {
-      delay(20);
-      transmittCommandByWiFi("re", (byte)0); /* Transmitt command to use onboard regulator
+      delay(50);
+      transmittCommandByWiFi("en", (byte)left_joystick_vrx_percent);
+      delay(50);
+      transmittCommandByWiFi("re", (byte)placeholder_value); /* Transmitt command to use onboard regulator
       to level the plane (crude autopilot) */
+
     }
     else
     {
       // Delay some time to give capacior time to recharge?
-      delay(20);
+      delay(50);
       transmittCommandByWiFi("la", (byte)right_joystick_vry_percent);
-      delay(20);
+      delay(50);
       transmittCommandByWiFi("le", (byte)right_joystick_vrx_percent);
-      delay(20);
+      delay(50);
       transmittCommandByWiFi("en", (byte)left_joystick_vrx_percent);
     }
   }
@@ -262,15 +306,13 @@ void flyPlaneTransmitter()
 
 void flyPlaneReciever()
 {
-  Serial.println("flyPlanceReciever - flag1111");
   byte old_val;
   command_and_value cav;
-  char en_command[3] = "en";
+  char en_command[3] = "en"; // Used to sanity check incomming data
   char re_command[3] = "re";
   drawMessageOnScreen("Plane\nmode", 2);
   while(true)
   {
-    Serial.println("flyPlanceReciever - flag1");
     //sendI2CServoCommand(re_command, cav.value);
     //delay(100);
     //continue;
@@ -287,7 +329,8 @@ void flyPlaneReciever()
     }
     if(receiveCommandByWiFi(&cav))
     {
-      if (strcmp(cav.command_chr_arr, en_command) == 0) { // Sanity check of recieved message
+      if (strcmp(cav.command_chr_arr, en_command) == 0) // Sanity check of recieved message
+      { 
         if(connection_link_ok == false) //Save cycles by only drawing on status change
         {
           drawMessageOnScreen("Plane\nmode", 2);
@@ -342,6 +385,7 @@ void armTranceiver()
     drawMessageOnScreen("Could not\nconnect to\nradio", 1);
   }
   radio.setPALevel(RF24_PA_LOW);
+  printf_begin();
   radio.printDetails();
 }
 
@@ -381,6 +425,7 @@ bool receiveCommandByWiFi(command_and_value *cav)
   }
   if(!radio.available())
   {
+    Serial.println("Could not recieve.");
     return false; // Signal no message was recieved
   }
   while (radio.available()) {
@@ -394,7 +439,9 @@ bool receiveCommandByWiFi(command_and_value *cav)
     cav->command_chr_arr[2] = '\0';
     cav->value = rec_chr_arr[2];
     //cav->value = 60;
-    Serial.println(cav->command_chr_arr);
+    Serial.print("Recieved command: ");
+    Serial.print(cav->command_chr_arr);
+    Serial.print(".  and value: ");
     Serial.println(cav->value);
     //Serial.println("Flag1");
     //Serial.println("receiveCommandByWiFi - flag 5");
