@@ -15,6 +15,8 @@
 // Constants for servo range
 #define SERVO_MIN 0
 #define SERVO_MAX 100
+#define PITCH_GAIN 2.5
+#define ROLL_GAIN 2.5
   
 Adafruit_SSD1306 display(OLED_RESET);
 
@@ -44,6 +46,9 @@ uint8_t test_limits_servo_pin = 3;
 uint8_t drivetrain_pin = 5;
 uint8_t drivetrain_max = 2000;
 uint8_t drivetrain_min = 1000;
+
+float desiredPitch = 2.5; // Each magnetometer needs to be calibrated upon vehicle start
+float desiredRoll = 0.0; //
 
 bool isSender = false;
 bool isReciever = false;
@@ -311,6 +316,14 @@ void flyPlaneReciever()
   command_and_value cav;
   char en_command[3] = "en"; // Used to sanity check incomming data
   char re_command[3] = "re";
+  {
+    // Read magnetometer and use its initial values when plane is on the 
+    // ground as the desired pitch and roll of the plane
+    sensors_event_t event;
+    mag.getEvent(&event);
+    desiredPitch = event.magnetic.x; // X-axis represents pitch
+    desiredRoll = event.magnetic.y;  // Y-axis represents roll
+  }
   drawMessageOnScreen("Plane\nmode", 2);
   while(true)
   {
@@ -355,7 +368,6 @@ void flyPlaneReciever()
 
 void flyByRegulator()
 {
-    Serial.println("Reading the magnetometer");
     // Read magnetometer
     sensors_event_t event;
     mag.getEvent(&event);
@@ -366,20 +378,19 @@ void flyByRegulator()
     // Check if the airplane is upside down
     bool isUpsideDown = (z > 0);
     // Desired pitch and roll (neutral position)
-    float desiredPitch = 10.0; // Each magnetometer needs to be calibrated
-    float desiredRoll = -10.0; // TODO: Remove hardcoded values.
     // Calculate pitch and roll errors
     float pitchError = desiredPitch - pitch;
     float rollError = desiredRoll - roll;
     // Adjust control values using proportional control
-    float elevatorOutput = PITCH_GAIN * pitchError;
-    float aileronOutput = ROLL_GAIN * rollError;
+    float elevatorOutput = (PITCH_GAIN * pitchError) + 50; // +50, as 50 represent servo in neutral position
+    float aileronOutput = (ROLL_GAIN * rollError) + 50; // +50, ...
     // Clamp outputs to servo range
-    elevatorOutput = constrain(elevatorOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, as 50 represent servo in neutral position
-    aileronOutput = constrain(aileronOutput, SERVO_MIN, SERVO_MAX) + 50; // +50, ...
+    elevatorOutput = constrain(elevatorOutput, SERVO_MIN, SERVO_MAX); 
+    aileronOutput = constrain(aileronOutput, SERVO_MIN, SERVO_MAX); 
     // Invert controls if upside down
     if (isUpsideDown)
     {
+      Serial.println("Upside down");
       elevatorOutput = SERVO_MAX - elevatorOutput;
       aileronOutput = SERVO_MAX - aileronOutput;
     }
@@ -390,6 +401,7 @@ void flyByRegulator()
     cav.command_chr_arr[2] = '\0';
     cav.value = aileronOutput;
     sendI2CServoCommand(cav.command_chr_arr, cav.value);
+    delay(20);
     cav.command_chr_arr[0] = 'l';
     cav.command_chr_arr[1] = 'e';
     cav.command_chr_arr[2] = '\0';
@@ -401,6 +413,7 @@ void flyByRegulator()
     Serial.print("Pitch: "); Serial.print(pitch);
     Serial.print(" Roll: "); Serial.print(roll);
     Serial.print(" Z: "); Serial.print(z);
+    Serial.print( "Upside down: "); z > 1 ? Serial.print("yes") : Serial.print("no");
     Serial.print(" Elevator: "); Serial.print(elevatorOutput);
     Serial.print(" Aileron: "); Serial.println(aileronOutput);
 }
@@ -494,9 +507,9 @@ bool receiveCommandByWiFi(command_and_value *cav)
     cav->command_chr_arr[2] = '\0';
     cav->value = rec_chr_arr[2];
     //cav->value = 60;
-    Serial.print("Recieved command: ");
+    Serial.print("Received command: ");
     Serial.print(cav->command_chr_arr);
-    Serial.print(".  and value: ");
+    Serial.print(" and value: ");
     Serial.println(cav->value);
     //Serial.println("Flag1");
     //Serial.println("receiveCommandByWiFi - flag 5");
