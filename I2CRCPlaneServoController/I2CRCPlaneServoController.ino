@@ -1,10 +1,6 @@
 #include <Wire.h>
 #include <Servo.h>
 
-// PID gains (adjust these for better control)
-#define PITCH_GAIN 3.5
-#define ROLL_GAIN 3.5
-
 int8_t drivetrain_max = 2000;
 int8_t drivetrain_min = 1000;
 
@@ -170,13 +166,13 @@ void executeCommand()
 
 // Angle should be between 0 and 100
 void moveServoToAngle(int angle_percent, Servo servo) {
-  if(angle_percent > 90)
+  if(angle_percent > 100)
   {
-    angle_percent = 90;
+    angle_percent = 100;
   }
-  if(angle_percent < 10)
+  if(angle_percent < 0)
   {
-    angle_percent = 10;
+    angle_percent = 0;
   }
   int val = map(angle_percent, 0, 100, 800, 2200);
   servo.writeMicroseconds(val);
